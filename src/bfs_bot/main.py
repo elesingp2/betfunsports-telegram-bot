@@ -73,17 +73,23 @@ async def h_chatid(msg: Message):
 
 @router.message(Command("status"))
 async def h_status(msg: Message):
-    if CREDS_FILE.exists():
-        try:
-            creds = json.loads(CREDS_FILE.read_text())
-            email = creds.get("email", "?")
-            await msg.answer(
-                f"\ud83d\udd11 Logged in as: <code>{email}</code>",
-                parse_mode="HTML",
-            )
-            return
-        except Exception:
-            pass
+    for path in (CREDS_FILE, TG_CONFIG):
+        if path.exists():
+            try:
+                data = json.loads(path.read_text())
+                email = data.get("email") or data.get("logged_in_as")
+                if not email:
+                    continue
+                eur = data.get("balance_eur", "")
+                bfs = data.get("balance_bfs", "")
+                balance = f"\nEUR: {eur} | BFS: {bfs}" if eur or bfs else ""
+                await msg.answer(
+                    f"\ud83d\udd11 Logged in as: <code>{email}</code>{balance}",
+                    parse_mode="HTML",
+                )
+                return
+            except Exception:
+                pass
     await msg.answer("No saved credentials. Agent hasn't logged in yet.")
 
 
