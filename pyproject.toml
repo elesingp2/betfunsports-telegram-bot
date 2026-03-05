@@ -1,17 +1,15 @@
 [project]
 name = "bfs-bot"
 version = "2.0.0"
-description = "Lightweight Telegram bot for monitoring betfunsports.com betting activity — logs, screenshots, stats"
+description = "Telegram notifications for betfunsports MCP agent"
 requires-python = ">=3.11"
 license = {text = "MIT"}
 dependencies = [
-    "bfs-mcp @ git+https://github.com/elesingp2/betfunsports-mcp.git",
     "aiogram>=3.20.0",
 ]
 
 [project.scripts]
 bfs-bot = "bfs_bot.main:main"
-bfs-bot-mcp = "bfs_bot.mcp_wrapper:main"
 bfs-log = "bfs_bot.client:main"
 
 [build-system]

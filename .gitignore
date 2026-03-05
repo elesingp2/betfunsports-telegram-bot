@@ -6,3 +6,4 @@ build/
 .env
 .bfs-mcp/
 bfs-bot-state.json
+telegram.json

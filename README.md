@@ -1,166 +1,126 @@
 # bfs-bot
 
-Lightweight Telegram bot for monitoring [betfunsports.com](https://betfunsports.com) betting activity.
+Telegram notifications for [betfunsports](https://betfunsports.com) MCP agent.
 
-Deploy locally or on a server. Every action your MCP agent takes — logins, bets, errors — auto-logged to Telegram with screenshots.
+Install alongside `bfs-mcp`, start once, send `/start` in Telegram — done. Every agent action (logins, bets, errors) gets auto-logged to your Telegram chat with screenshots.
 
-No LLM, no chat interface. Just a fast notification channel.
+## How it works
 
 ```
-MCP Agent (Claude / Cursor / OpenClaw)
-    │
-    │  uses bfs-bot-mcp (drop-in replacement for bfs-mcp)
-    │
-    ├── bfs_login()         →  ✅ LOGIN: user123 | EUR: 50 | BFS: 87
-    ├── bfs_place_bet()     →  🎯 BET PLACED: Football 1X2, home, 5 BFS  📸
-    ├── bfs_place_bet()     →  ❌ BET FAILED: betting closed  📸
-    ├── bfs_active_bets()   →  📊 ACTIVE BETS: 3
-    └── bfs_screenshot()    →  📸 [screenshot]
-                                    │
-                                    ▼
-                              Telegram chat
+1. pip install bfs-bot         ← agent installs
+2. BFS_TG_TOKEN=xxx bfs-bot   ← agent starts
+3. User sends /start           ← saves ~/.bfs-mcp/telegram.json
+4. bfs-mcp auto-sends notifications on every tool call
 ```
 
-## Setup (3 steps)
+The bot saves `token` + `chat_id` to `~/.bfs-mcp/telegram.json`. The MCP server (`bfs-mcp`) reads this file and sends Telegram notifications — no config changes, no restarts.
+
+## Setup
 
 ### 1. Install
 
 ```bash
 pip install git+https://github.com/elesingp2/betfunsports-telegram-bot.git
-playwright install --with-deps chromium
 ```
 
-### 2. Start the bot & register your chat
+### 2. Get a bot token
+
+Create a bot via [@BotFather](https://t.me/BotFather) in Telegram.
+
+### 3. Start
 
 ```bash
-export BFS_TG_TOKEN=your_token    # get from @BotFather
-bfs-bot
+BFS_TG_TOKEN=your_token bfs-bot
 ```
 
-Open your bot in Telegram → send `/start` → chat registered.
+### 4. Send `/start` in Telegram
 
-### 3. Switch MCP config to `bfs-bot-mcp`
-
-Replace `bfs-mcp` with `bfs-bot-mcp` in your MCP client config:
-
-**Claude Desktop** (`claude_desktop_config.json`):
-```json
-{
-  "mcpServers": {
-    "bfs": {
-      "command": "bfs-bot-mcp",
-      "env": {
-        "BFS_TG_TOKEN": "your_telegram_bot_token"
-      }
-    }
-  }
-}
-```
-
-**Cursor**: Settings → MCP → command: `bfs-bot-mcp`
-
-That's it. The agent uses the same 14 tools as `bfs-mcp`, but every action is auto-logged to your Telegram.
+Open your bot → send `/start` → notifications enabled.
 
 ## What gets logged
 
-| Action | Telegram notification |
-|--------|----------------------|
-| Login | ✅/❌ username, balances + screenshot on error |
-| Place bet | 🎯/❌ coupon, picks, room, stake + screenshot |
-| Registration | ✅/❌ username, email |
-| Auth status | ℹ️ username, balances |
-| Coupons | 📋 count of available coupons |
-| Coupon details | 🔍 title, event count |
-| Active bets | 📊 summary |
-| Bet history | 📜 summary |
-| Screenshot | 📸 forwarded to chat |
-| Logout | 🚪 logged out |
+When `bfs-mcp` has notification support, every tool call is auto-logged:
+
+| Agent action | Telegram message |
+|-------------|-----------------|
+| `bfs_login()` | ✅ LOGIN: user123 — EUR: 50, BFS: 87 |
+| `bfs_place_bet()` | 🎯 BET: Football 1X2, home, 5 BFS 📸 |
+| `bfs_place_bet()` fail | ❌ BET FAILED: betting closed 📸 |
+| `bfs_screenshot()` | 📸 screenshot forwarded |
+| `bfs_active_bets()` | 📊 Active bets (3) |
+| `bfs_logout()` | 🚪 Logged out |
+
+## Integration with bfs-mcp
+
+The `notify` module uses only stdlib and can be imported directly by `bfs-mcp`:
+
+```python
+# In bfs-mcp/server.py — add at the top:
+try:
+    from bfs_bot.notify import send_text, send_photo
+except ImportError:
+    send_text = send_photo = None
+
+# After a tool call:
+if send_text:
+    send_text("✅ <b>LOGIN</b>: user123\nEUR: 50 | BFS: 87")
+
+# With screenshot:
+if send_photo:
+    send_photo(screenshot_bytes, caption="🎯 <b>BET PLACED</b>: Football 1X2")
+```
+
+If `bfs-bot` is not installed, the import silently fails — zero impact on `bfs-mcp`.
 
 ## Telegram commands
 
 | Command | Description |
 |---------|-------------|
-| `/start` | Register chat for logs |
-| `/logs` | Last 10 log entries (from HTTP API) |
-| `/logs N` | Last N entries (max 50) |
-| `/stats` | Betting statistics |
-| `/screen` | Last received screenshot |
+| `/start` | Enable notifications (save config) |
+| `/status` | Show who's logged in |
 | `/chatid` | Show chat ID |
+
+## CLI
+
+Send notifications from shell scripts:
+
+```bash
+bfs-log "Agent started"
+bfs-log -l error "Login failed"
+bfs-log -l success "Bet placed"
+bfs-log -s screenshot.png "Error on page"
+```
+
+## Config
+
+The only file: `~/.bfs-mcp/telegram.json`
+
+```json
+{
+  "token": "123456:ABC...",
+  "chat_ids": [870130546]
+}
+```
+
+Created automatically when you send `/start`. Shared between `bfs-bot` and `bfs-mcp`.
+
+| Env variable | Required | Description |
+|-------------|----------|-------------|
+| `BFS_TG_TOKEN` | yes | Telegram bot token |
 
 ## Architecture
 
 ```
-┌───────────────────────────────────────────────────┐
-│  bfs-bot-mcp  (MCP server, stdio)                 │
-│  Same 14 tools as bfs-mcp + Telegram notifications│
-│  └── BFSBrowser (Playwright headless)             │
-│  └── notify.py → Telegram Bot API                 │
-└───────────────────────────────────────────────────┘
+bfs-bot (this package)
+├── main.py      ← Telegram polling (/start saves config)
+├── notify.py    ← send_text() / send_photo() — stdlib only, importable by bfs-mcp
+└── client.py    ← bfs-log CLI
 
-┌───────────────────────────────────────────────────┐
-│  bfs-bot  (Telegram polling + HTTP API)           │
-│  Monitoring dashboard: /logs /stats /screen       │
-│  HTTP API for external log sources                │
-└───────────────────────────────────────────────────┘
-
-┌───────────────────────────────────────────────────┐
-│  bfs-log  (CLI, zero dependencies)                │
-│  Send logs from shell scripts / cron              │
-└───────────────────────────────────────────────────┘
+~/.bfs-mcp/
+├── telegram.json     ← shared config (token + chat_ids)
+├── credentials.json  ← saved by bfs-mcp (read by /status)
+└── cookies.json      ← saved by bfs-mcp
 ```
-
-### How it works
-
-1. **`bfs-bot`** runs Telegram polling — registers your chat on `/start`, saves chat ID to `bfs-bot-state.json`
-2. **`bfs-bot-mcp`** runs as MCP server — reads chat ID from the same state file, sends notifications directly via Telegram Bot API
-3. Both processes share `BFS_TG_TOKEN` and the state file — no HTTP needed between them
-
-## HTTP API (optional)
-
-The `bfs-bot` process also exposes a local HTTP API for sending logs from scripts:
-
-```bash
-# text log
-curl -X POST http://127.0.0.1:9867/api/log \
-  -H "Content-Type: application/json" \
-  -d '{"level": "success", "text": "Custom log message"}'
-
-# screenshot
-curl -X POST http://127.0.0.1:9867/api/screenshot \
-  -H "Content-Type: application/json" \
-  -d '{"image": "'$(base64 -w0 screen.png)'", "caption": "Error page"}'
-
-# bet event
-curl -X POST http://127.0.0.1:9867/api/bet \
-  -H "Content-Type: application/json" \
-  -d '{"coupon": "/football/1x2/123", "status": "placed", "stake": "5", "room": "Wooden"}'
-```
-
-Or use the CLI:
-```bash
-bfs-log "Agent started"
-bfs-log -l error "Login failed"
-bfs-log -s screenshot.png "Error on page"
-```
-
-## Configuration
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `BFS_TG_TOKEN` | — | Telegram bot token (**required**) |
-| `BFS_CHAT_ID` | — | Chat ID (optional — auto-saved on `/start`) |
-| `BFS_API_HOST` | `127.0.0.1` | HTTP API bind address |
-| `BFS_API_PORT` | `9867` | HTTP API port |
-| `BFS_MAX_LOGS` | `500` | Max log entries in memory |
-| `BFS_STATE_FILE` | `bfs-bot-state.json` | Shared state file path |
-
-## Entry points
-
-| Command | What it does |
-|---------|--------------|
-| `bfs-bot` | Telegram polling bot + HTTP API (monitoring dashboard) |
-| `bfs-bot-mcp` | MCP server with auto Telegram logging (replaces `bfs-mcp`) |
-| `bfs-log` | CLI for sending logs (zero extra dependencies) |
 
 ## License
 

@@ -1,8 +1,12 @@
-"""Telegram notification helper — sends messages/photos via Bot API.
+"""Telegram notification — stdlib only, zero dependencies.
 
-Used by the MCP wrapper to auto-log tool calls to Telegram.
-Reads chat IDs from BFS_CHAT_ID env var or bfs-bot state file.
-If no token or no chats configured, all calls are silently skipped.
+Reads config from ~/.bfs-mcp/telegram.json (created by `bfs-bot` on /start).
+Can be imported by bfs-mcp to auto-send notifications:
+
+    try:
+        from bfs_bot.notify import send_text, send_photo
+    except ImportError:
+        send_text = send_photo = None
 """
 
 from __future__ import annotations
@@ -10,74 +14,99 @@ from __future__ import annotations
 import json
 import logging
 import os
+import urllib.request
+import urllib.error
 from pathlib import Path
-
-import aiohttp
 
 log = logging.getLogger(__name__)
 
-STATE_FILE = Path(os.environ.get("BFS_STATE_FILE", "bfs-bot-state.json"))
+CONFIG_FILE = Path.home() / ".bfs-mcp" / "telegram.json"
 
 
-def _token() -> str:
-    return os.environ.get("BFS_TG_TOKEN", "")
+def _config() -> tuple[str, list[int]]:
+    token = os.environ.get("BFS_TG_TOKEN", "")
+    chat_ids: list[int] = []
 
+    env_chat = os.environ.get("BFS_CHAT_ID", "")
+    if env_chat:
+        chat_ids = [int(c.strip()) for c in env_chat.split(",") if c.strip()]
 
-def _chat_ids() -> set[int]:
-    ids: set[int] = set()
-
-    env = os.environ.get("BFS_CHAT_ID", "")
-    if env:
-        for c in env.split(","):
-            c = c.strip()
-            if c:
-                ids.add(int(c))
-
-    try:
-        if STATE_FILE.exists():
-            data = json.loads(STATE_FILE.read_text())
+    if CONFIG_FILE.exists():
+        try:
+            data = json.loads(CONFIG_FILE.read_text())
+            if not token:
+                token = data.get("token", "")
             for cid in data.get("chat_ids", []):
-                ids.add(int(cid))
-    except Exception:
-        pass
+                if int(cid) not in chat_ids:
+                    chat_ids.append(int(cid))
+        except Exception:
+            pass
 
-    return ids
+    return token, chat_ids
 
 
-async def send(text: str, photo: bytes | None = None) -> None:
-    """Send a message (and optional photo) to all registered Telegram chats."""
-    token = _token()
-    if not token:
-        return
-    chats = _chat_ids()
-    if not chats:
-        return
+def send_text(text: str) -> bool:
+    """Send a text message to Telegram. Returns True on success."""
+    token, chat_ids = _config()
+    if not token or not chat_ids:
+        return False
 
-    try:
-        async with aiohttp.ClientSession() as session:
-            for cid in chats:
-                try:
-                    if photo:
-                        data = aiohttp.FormData()
-                        data.add_field("chat_id", str(cid))
-                        data.add_field("caption", text[:1024])
-                        data.add_field("parse_mode", "HTML")
-                        data.add_field("photo", photo, filename="screen.png",
-                                       content_type="image/png")
-                        async with session.post(
-                            f"https://api.telegram.org/bot{token}/sendPhoto",
-                            data=data,
-                        ) as resp:
-                            if resp.status != 200:
-                                log.warning("sendPhoto %s: %s", cid, await resp.text())
-                    else:
-                        async with session.post(
-                            f"https://api.telegram.org/bot{token}/sendMessage",
-                            json={"chat_id": cid, "text": text[:4096], "parse_mode": "HTML"},
-                        ) as resp:
-                            if resp.status != 200:
-                                log.warning("sendMessage %s: %s", cid, await resp.text())
-                except Exception as e:
-                    log.warning("notify %s: %s", cid, e)
-    except Exception as e:
-        log.warning("notify session: %s", e)
+    ok = False
+    for cid in chat_ids:
+        body = json.dumps({
+            "chat_id": cid,
+            "text": text[:4096],
+            "parse_mode": "HTML",
+        }).encode()
+        req = urllib.request.Request(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            data=body,
+            headers={"Content-Type": "application/json"},
+        )
+        try:
+            urllib.request.urlopen(req, timeout=10)
+            ok = True
+        except Exception as e:
+            log.warning("sendMessage to %s: %s", cid, e)
+    return ok
+
+
+def send_photo(photo: bytes, caption: str = "") -> bool:
+    """Send a PNG photo to Telegram. Returns True on success."""
+    token, chat_ids = _config()
+    if not token or not chat_ids:
+        return False
+
+    boundary = "----BFS7d0b3a"
+    ok = False
+
+    for cid in chat_ids:
+        parts: list[bytes] = []
+        for name, value in [("chat_id", str(cid)),
+                            ("caption", caption[:1024]),
+                            ("parse_mode", "HTML")]:
+            parts.append(
+                f"--{boundary}\r\n"
+                f"Content-Disposition: form-data; name=\"{name}\"\r\n"
+                f"\r\n{value}\r\n".encode()
+            )
+        parts.append(
+            f"--{boundary}\r\n"
+            f"Content-Disposition: form-data; name=\"photo\"; "
+            f"filename=\"screen.png\"\r\n"
+            f"Content-Type: image/png\r\n\r\n".encode()
+        )
+        parts.append(photo)
+        parts.append(f"\r\n--{boundary}--\r\n".encode())
+
+        req = urllib.request.Request(
+            f"https://api.telegram.org/bot{token}/sendPhoto",
+            data=b"".join(parts),
+            headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+        )
+        try:
+            urllib.request.urlopen(req, timeout=15)
+            ok = True
+        except Exception as e:
+            log.warning("sendPhoto to %s: %s", cid, e)
+    return ok
