@@ -1,17 +1,16 @@
 [project]
 name = "bfs-bot"
-version = "1.0.0"
-description = "Telegram bot for betfunsports.com — LLM-powered sports prediction agent"
+version = "2.0.0"
+description = "Telegram notifications for betfunsports MCP agent"
 requires-python = ">=3.11"
 license = {text = "MIT"}
 dependencies = [
-    "bfs-mcp @ git+https://github.com/elesingp2/bfs-knowledge.git#subdirectory=bfs-mcp",
     "aiogram>=3.20.0",
-    "openai>=1.0.0",
 ]
 
 [project.scripts]
 bfs-bot = "bfs_bot.main:main"
+bfs-log = "bfs_bot.client:main"
 
 [build-system]
 requires = ["setuptools>=68.0"]
